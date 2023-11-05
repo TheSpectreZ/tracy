@@ -4589,9 +4589,6 @@ bool Worker::Process( const QueueItem& ev )
     case QueueType::GpuCalibration:
         ProcessGpuCalibration( ev.gpuCalibration );
         break;
-    case QueueType::GpuTimeSync:
-        ProcessGpuTimeSync( ev.gpuTimeSync );
-        break;
     case QueueType::GpuContextName:
         ProcessGpuContextName( ev.gpuContextName );
         break;
@@ -5923,29 +5920,6 @@ void Worker::ProcessGpuCalibration( const QueueGpuCalibration& ev )
     ctx->calibrationMod = double( cpuDelta ) / gpuDelta;
     ctx->calibratedGpuTime = gpuTime;
     ctx->calibratedCpuTime = TscTime( ev.cpuTime );
-}
-    
-void Worker::ProcessGpuTimeSync( const QueueGpuTimeSync& ev )
-{
-    auto ctx = m_gpuCtxMap[ev.context];
-    assert( ctx );
-
-    int64_t gpuTime;
-    if( ctx->period == 1.f )
-    {
-        gpuTime = ev.gpuTime;
-    }
-    else
-    {
-        gpuTime = int64_t( double( ctx->period ) * ev.gpuTime );      // precision loss
-    }
-
-    const auto cpuTime = TscTime( ev.cpuTime );
-
-    ctx->timeDiff = cpuTime - gpuTime;
-    ctx->lastGpuTime = 0;
-    ctx->overflow = 0;
-    ctx->overflowMul = 0;
 }
 
 void Worker::ProcessGpuContextName( const QueueGpuContextName& ev )

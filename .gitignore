@@ -7,7 +7,6 @@ Release
 Debug
 _build
 _compiler
-tools/*
 *.d
 *.o
 *.so

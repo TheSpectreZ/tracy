@@ -45,14 +45,6 @@
 #  include <vector>
 #endif
 
-#ifdef __QNX__
-#  include <stdint.h>
-#  include <stdio.h>
-#  include <string.h>
-#  include <sys/syspage.h>
-#  include <sys/stat.h>
-#endif
-
 #include <algorithm>
 #include <assert.h>
 #include <atomic>
@@ -121,10 +113,6 @@ extern "C" typedef BOOL (WINAPI *t_GetLogicalProcessorInformationEx)( LOGICAL_PR
 
 #if !( ( defined _WIN32 && _WIN32_WINNT >= _WIN32_WINNT_VISTA ) || defined __linux__ )
 #  include <mutex>
-#endif
-
-#ifdef __QNX__
-extern char* __progname;
 #endif
 
 namespace tracy
@@ -412,8 +400,6 @@ static const char* GetProcessName()
 #elif defined __APPLE__ || defined BSD
     auto buf = getprogname();
     if( buf ) processName = buf;
-#elif defined __QNX__
-    processName = __progname;
 #endif
     return processName;
 }
@@ -450,10 +436,6 @@ static const char* GetProcessExecutablePath()
 #elif defined __NetBSD__
     static char buf[1024];
     readlink( "/proc/curproc/exe", buf, 1024 );
-    return buf;
-#elif defined __QNX__
-    static char buf[_PC_PATH_MAX + 1];
-    _cmdname(buf);
     return buf;
 #else
     return nullptr;
@@ -533,8 +515,6 @@ static const char* GetHostInfo()
     ptr += sprintf( ptr, "OS: BSD (NetBSD)\n" );
 #elif defined __OpenBSD__
     ptr += sprintf( ptr, "OS: BSD (OpenBSD)\n" );
-#elif defined __QNX__
-    ptr += sprintf( ptr, "OS: QNX\n" );
 #else
     ptr += sprintf( ptr, "OS: unknown\n" );
 #endif
@@ -707,21 +687,6 @@ static const char* GetHostInfo()
     size_t sz = sizeof( memSize );
     sysctlbyname( "hw.physmem", &memSize, &sz, nullptr, 0 );
     ptr += sprintf( ptr, "RAM: %zu MB\n", memSize / 1024 / 1024 );
-#elif defined __QNX__
-    struct asinfo_entry *entries = SYSPAGE_ENTRY(asinfo);
-    size_t count = SYSPAGE_ENTRY_SIZE(asinfo) / sizeof(struct asinfo_entry);
-    char *strings = SYSPAGE_ENTRY(strings)->data;
-
-    uint64_t memSize = 0;
-    size_t i;
-    for (i = 0; i < count; i++) {
-        struct asinfo_entry *entry = &entries[i];
-        if (strcmp(strings + entry->name, "ram") == 0) {
-            memSize += entry->end - entry->start + 1;
-        }
-    }
-    memSize = memSize / 1024 / 1024;
-    ptr += sprintf( ptr, "RAM: %llu MB\n", memSize);
 #else
     ptr += sprintf( ptr, "RAM: unknown\n" );
 #endif
@@ -1177,14 +1142,12 @@ thread_local bool RpThreadShutdown = false;
 #  ifdef TRACY_MANUAL_LIFETIME
 ProfilerData* s_profilerData = nullptr;
 static ProfilerThreadData& GetProfilerThreadData();
-static std::atomic<bool> s_isProfilerStarted { false };
 TRACY_API void StartupProfiler()
 {
     s_profilerData = (ProfilerData*)tracy_malloc( sizeof( ProfilerData ) );
     new (s_profilerData) ProfilerData();
     s_profilerData->profiler.SpawnWorkerThreads();
     GetProfilerThreadData().token = ProducerWrapper( *s_profilerData );
-    s_isProfilerStarted.store( true, std::memory_order_seq_cst );
 }
 static ProfilerData& GetProfilerData()
 {
@@ -1193,17 +1156,12 @@ static ProfilerData& GetProfilerData()
 }
 TRACY_API void ShutdownProfiler()
 {
-    s_isProfilerStarted.store( false, std::memory_order_seq_cst );
     s_profilerData->~ProfilerData();
     tracy_free( s_profilerData );
     s_profilerData = nullptr;
     rpmalloc_finalize();
     RpThreadInitDone = false;
     RpInitDone.store( 0, std::memory_order_release );
-}
-TRACY_API bool IsProfilerStarted()
-{
-    return s_isProfilerStarted.load( std::memory_order_seq_cst );
 }
 #  else
 static std::atomic<int> profilerDataLock { 0 };
@@ -1719,10 +1677,6 @@ void Profiler::Worker()
     new(m_broadcast) UdpBroadcast();
 #  ifdef TRACY_ONLY_LOCALHOST
     const char* addr = "127.255.255.255";
-#  elif defined __QNX__
-     // global broadcast address of 255.255.255.255 is not well-supported by QNX,
-     // use the interface broadcast address instead, e.g. "const char* addr = 192.168.1.255;"
-#    error Need to set an appropriate broadcast address for a QNX target.
 #  else
     const char* addr = "255.255.255.255";
 #  endif
@@ -4304,11 +4258,6 @@ TRACY_API void ___tracy_emit_gpu_new_context( ___tracy_gpu_new_context_data data
     tracy::MemWrite( &item->gpuNewContext.context, data.context );
     tracy::MemWrite( &item->gpuNewContext.flags, data.flags );
     tracy::MemWrite( &item->gpuNewContext.type, data.type );
-
-#ifdef TRACY_ON_DEMAND
-    tracy::GetProfiler().DeferItem( *item );
-#endif
-
     TracyLfqCommitC;
 }
 
@@ -4321,11 +4270,6 @@ TRACY_API void ___tracy_emit_gpu_context_name( const struct ___tracy_gpu_context
     tracy::MemWrite( &item->gpuContextNameFat.context, data.context );
     tracy::MemWrite( &item->gpuContextNameFat.ptr, (uint64_t)ptr );
     tracy::MemWrite( &item->gpuContextNameFat.size, data.len );
-
-#ifdef TRACY_ON_DEMAND
-    tracy::GetProfiler().DeferItem( *item );
-#endif
-
     TracyLfqCommitC;
 }
 
@@ -4336,15 +4280,6 @@ TRACY_API void ___tracy_emit_gpu_calibration( const struct ___tracy_gpu_calibrat
     tracy::MemWrite( &item->gpuCalibration.gpuTime, data.gpuTime );
     tracy::MemWrite( &item->gpuCalibration.cpuDelta, data.cpuDelta );
     tracy::MemWrite( &item->gpuCalibration.context, data.context );
-    TracyLfqCommitC;
-}
-
-TRACY_API void ___tracy_emit_gpu_time_sync( const struct ___tracy_gpu_time_sync_data data )
-{
-    TracyLfqPrepareC( tracy::QueueType::GpuTimeSync );
-    tracy::MemWrite( &item->gpuTimeSync.cpuTime, tracy::Profiler::GetTime() );
-    tracy::MemWrite( &item->gpuTimeSync.gpuTime, data.gpuTime );
-    tracy::MemWrite( &item->gpuTimeSync.context, data.context );
     TracyLfqCommitC;
 }
 
@@ -4455,16 +4390,6 @@ TRACY_API void ___tracy_emit_gpu_calibration_serial( const struct ___tracy_gpu_c
     tracy::Profiler::QueueSerialFinish();
 }
 
-TRACY_API void ___tracy_emit_gpu_time_sync_serial( const struct ___tracy_gpu_time_sync_data data )
-{
-    auto item = tracy::Profiler::QueueSerial();
-    tracy::MemWrite( &item->hdr.type, tracy::QueueType::GpuTimeSync );
-    tracy::MemWrite( &item->gpuTimeSync.cpuTime, tracy::Profiler::GetTime() );
-    tracy::MemWrite( &item->gpuTimeSync.gpuTime, data.gpuTime );
-    tracy::MemWrite( &item->gpuTimeSync.context, data.context );
-    tracy::Profiler::QueueSerialFinish();
-}
-
 TRACY_API int ___tracy_connected( void )
 {
     return tracy::GetProfiler().IsConnected();
@@ -4484,11 +4409,6 @@ TRACY_API void ___tracy_startup_profiler( void )
 TRACY_API void ___tracy_shutdown_profiler( void )
 {
     tracy::ShutdownProfiler();
-}
-
-TRACY_API int ___tracy_profiler_started( void )
-{
-    return tracy::s_isProfilerStarted.load( std::memory_order_seq_cst );
 }
 #  endif
 
